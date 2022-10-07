@@ -1,0 +1,77 @@
+#!/bin/bash
+
+# Cronic v3 - cron job report wrapper
+# Copyright 2007 Chuck Houpt.
+# Amended 2013 Andrew Coulton.
+# Amended 2021 & 2022 Rui Pinheiro
+# Public Domain CC0: http://creativecommons.org/publicdomain/zero/1.0/
+
+set -eu
+
+TASKID=$(date "+%Y-%m-%d_%Hh%Mm%Ss")
+
+CRONIC_NAME="${CRONIC_NAME:=$1}"
+CRONIC_DIR="${CRONIC_DIR:=/var/log/cronic}"
+CRONIC_REPORT="$CRONIC_DIR/$CRONIC_NAME"
+CRONIC_TIMEOUT="${CRONIC_TIMEOUT:=1h}"
+
+[[ ! -d "$CRONIC_REPORT" ]] && mkdir -p "$CRONIC_REPORT"
+OUT="$CRONIC_REPORT/$TASKID.out"
+ERR="$CRONIC_REPORT/$TASKID.err"
+TRACE="$CRONIC_REPORT/$TASKID.trace"
+REPORT="$CRONIC_REPORT/$TASKID.log"
+
+# Run the subcommand
+set +e
+
+timeout --verbose --kill-after=60 "$CRONIC_TIMEOUT" "$@" >"$OUT" 2>"$TRACE"
+RESULT="$?"
+
+set -e
+
+# Filter any trace output
+PATTERN="^${PS4:0:1}\\+${PS4:1}"
+if grep -aq "$PATTERN" $TRACE ; then
+	! grep -av "$PATTERN" $TRACE > $ERR
+else
+	ERR="$TRACE"
+fi
+
+# Build the report log file ready for output
+if [ "$RESULT" -ne 0 -o -s "$ERR" ]; then
+	echo "Cronic detected failure or error output for the command:" > "$REPORT"
+else
+	echo "Cronic detected successful execution of the command:" > "$REPORT"
+fi
+
+echo "$@" >> "$REPORT"
+echo ""   >> "$REPORT"
+echo "RESULT CODE: $RESULT" >> "$REPORT"
+echo "" >> "$REPORT"
+echo "ERROR OUTPUT:" >> "$REPORT"
+cat "$ERR" >> "$REPORT"
+echo "" >> "$REPORT"
+echo "STANDARD OUTPUT:" >> "$REPORT"
+cat "$OUT" >> "$REPORT"
+
+if [ "$TRACE" != "$ERR" ]; then
+	echo "" >> "$REPORT"
+	echo "TRACE-ERROR OUTPUT:" >> "$REPORT"
+	cat "$TRACE" >> "$REPORT"
+fi
+
+# If there was an error, output the report to trigger an email
+if [ "$RESULT" -ne 0 -o -s "$ERR" ]; then
+	cat "$REPORT"
+fi
+
+# Remove the temporary working files
+rm -f "$OUT"
+rm -f "$ERR"
+rm -f "$TRACE"
+
+# Delete old reports, if any. Keep only <60 days old
+[[ ! -z "$CRONIC_REPORT" ]] && find "$CRONIC_REPORT" -type f -mtime +60 -exec rm {} \;
+
+# Done
+exit "$RESULT"
